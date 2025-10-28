@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "KKO-KKA_OT",
+    "slug": "hjkko",
+    "owner": "hyunjin_9953",
+    "plugins": [
+      "expo-router",
+      "expo-web-browser",
+      "expo-notifications"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "android": {
+      "permissions": ["POST_NOTIFICATIONS"],
+      "notification": {
+        "channel": "default"
+      },
+      "softwareKeyboardLayoutMode": "pan"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "50919dcd-9be8-4a33-9607-128de17a9649"
+      }
+    }
+  }
+}
