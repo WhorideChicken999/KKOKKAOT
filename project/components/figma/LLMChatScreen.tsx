@@ -1,4 +1,5 @@
 // components/figma/LLMChatScreen.tsx
+
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -20,7 +21,6 @@ import {
   X,
   ArrowLeft,
   Camera,
-  ImageIcon,
   Check,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -31,7 +31,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MainScreen } from '../../App';
 
 const API_BASE_URL = 'https://loyd-extemporaneous-annalise.ngrok-free.dev';
-const APP_HEADER_HEIGHT = 56;
 const BOTTOM_NAV_HEIGHT = 80;
 
 type ChatMessage = {
@@ -42,13 +41,13 @@ type ChatMessage = {
 
 type WardrobeItem = {
   id: number;
-  name: string;
-  brand: string;
-  category: string;
-  color: string;
-  fit: string;
-  materials: string[];
-  image: string;
+  name?: string;
+  brand?: string;
+  category?: string;
+  color?: string;
+  fit?: string;
+  materials?: string[];
+  image?: string;
   top_category?: string;
   bottom_category?: string;
   outer_category?: string;
@@ -62,8 +61,11 @@ type WardrobeItem = {
   has_outer?: boolean;
   has_dress?: boolean;
   image_path?: string;
-  is_recommended?: boolean;  // 추천된 아이템
-  is_selected?: boolean;      // 선택된 아이템
+  is_default?: boolean;
+
+  // UI 전용 플래그
+  is_recommended?: boolean;
+  is_selected?: boolean;
 };
 
 export default function LLMChatScreen({
@@ -74,15 +76,29 @@ export default function LLMChatScreen({
   onNavigate: (step: MainScreen) => void;
 }) {
   const [userId, setUserId] = useState<number | null>(null);
+
+  // 내 전체 옷장 (기본템 포함)
   const [wardrobeItems, setWardrobeItems] = useState<WardrobeItem[]>([]);
+
+  // 채팅 메세지들
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+
+  // 입력창
   const [chatInput, setChatInput] = useState('');
+
+  // 로딩 상태
   const [chatLoading, setChatLoading] = useState(false);
-  const [chatRecommendations, setChatRecommendations] = useState<WardrobeItem[]>([]);
   const [uploading, setUploading] = useState(false);
+
+  // 추천 / 선택 아이템 카드들 (UI에 가로 스크롤로 뿌리는 영역)
+  const [chatRecommendations, setChatRecommendations] = useState<WardrobeItem[]>([]);
+
+  // 지금 유저가 카드 눌러서 선택해둔 아이템들의 id (한 번에 1개만 유지하도록 설계했었음)
   const [selectedItemIds, setSelectedItemIds] = useState<number[]>([]);
 
-  // 사용자 ID 불러오기
+  // --------------------------------------------------
+  // 1) 사용자 ID 불러오기 (앱 로드 시 1번만)
+  // --------------------------------------------------
   useEffect(() => {
     const loadUserId = async () => {
       console.log('💾 사용자 정보 로딩 시작...');
@@ -91,9 +107,9 @@ export default function LLMChatScreen({
         console.log('📦 AsyncStorage 데이터:', userData);
         if (userData) {
           const user = JSON.parse(userData);
-          console.log('👤 파싱된 사용자 정보:', user);
-          console.log('🆔 사용자 ID:', user.id || user.user_id);
-          setUserId(user.id || user.user_id);
+          const resolvedId = user.id || user.user_id;
+          console.log('👤 파싱된 사용자 ID:', resolvedId);
+          setUserId(resolvedId);
         } else {
           console.log('⚠️ AsyncStorage에 사용자 정보 없음');
         }
@@ -104,34 +120,39 @@ export default function LLMChatScreen({
     loadUserId();
   }, []);
 
-  // 옷장 데이터 불러오기
+  // --------------------------------------------------
+  // 2) 옷장 불러오기 (userId 생기면)
+  //    👉 include_defaults=true 로 바꿈 (기본템도 카드로 보여줄 수 있게)
+  // --------------------------------------------------
   const fetchWardrobe = useCallback(async () => {
     console.log('👕 옷장 데이터 로딩 시작... userId:', userId);
     if (!userId) {
       console.log('⚠️ userId 없음 - 옷장 데이터 로드 취소');
       return;
     }
-    
+
     try {
-      const url = `${API_BASE_URL}/api/wardrobe/${userId}?include_defaults=false`;
+      const url = `${API_BASE_URL}/api/wardrobe/${userId}?include_defaults=true`;
       console.log('📡 API 호출:', url);
       const response = await fetch(url);
       console.log('📥 응답 상태:', response.status);
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('✅ 옷장 데이터 로드 성공:', data.items.length, '개');
-        
-        // 중복 제거
-        const uniqueItems = data.items.filter((item: WardrobeItem, index: number, self: WardrobeItem[]) => 
-          index === self.findIndex((t: WardrobeItem) => t.id === item.id)
-        );
-        
-        console.log('🔄 중복 제거 후:', uniqueItems.length, '개');
-        setWardrobeItems(uniqueItems);
-      } else {
+
+      if (!response.ok) {
         console.error('❌ 옷장 데이터 로드 실패:', response.status);
+        return;
       }
+
+      const data = await response.json();
+      console.log('✅ 옷장 데이터 로드 성공:', data.items?.length, '개');
+
+      // 혹시 중복 item.id 있으면 uniq 처리
+      const uniqueItems = data.items.filter(
+        (item: WardrobeItem, index: number, self: WardrobeItem[]) =>
+          index === self.findIndex((t: WardrobeItem) => t.id === item.id),
+      );
+
+      console.log('🔄 중복 제거 후:', uniqueItems.length, '개');
+      setWardrobeItems(uniqueItems);
     } catch (error) {
       console.error('❌ 옷장 데이터 로드 실패:', error);
     }
@@ -143,27 +164,32 @@ export default function LLMChatScreen({
     }
   }, [userId, fetchWardrobe]);
 
-  // 아이템 선택 (단일 선택만 가능)
+  // --------------------------------------------------
+  // 3) 아이템 카드 선택 토글 (추천 카드 탭하면 선택 / 해제)
+  //    - 지금은 1개만 선택 유지
+  // --------------------------------------------------
   const toggleItemSelection = (itemId: number) => {
     setSelectedItemIds(prev => {
-      // 이미 선택된 아이템을 다시 클릭하면 선택 해제
       if (prev.includes(itemId)) {
-        return [];
+        return []; // 이미 선택된 거 또 누르면 비우기
       } else {
-        // 새 아이템 선택 (기존 선택은 자동 해제)
-        return [itemId];
+        return [itemId]; // 새 선택은 덮어쓰기
       }
     });
   };
 
-  // LLM 채팅 요청
+  // --------------------------------------------------
+  // 4) 채팅 보내기: LLM 호출
+  //    백엔드에서 recommendations = [item_id, ...] 형식으로 온다고 가정하고
+  //    그걸 wardrobeItems에서 찾아서 카드로 만들어 붙임
+  // --------------------------------------------------
   const sendChatMessage = async () => {
     console.log('\n🚀 sendChatMessage 호출됨!');
     console.log('📝 입력값:', chatInput);
     console.log('👤 userId:', userId);
-    console.log('👕 선택된 아이템:', selectedItemIds);
+    console.log('👕 선택된 아이템 IDs:', selectedItemIds);
     console.log('⏳ chatLoading:', chatLoading);
-    
+
     if (!chatInput.trim() || !userId || chatLoading) {
       console.log('⚠️ 조건 실패 - 메시지 전송 취소');
       return;
@@ -175,18 +201,18 @@ export default function LLMChatScreen({
       timestamp: new Date(),
     };
 
+    // 채팅창에 내가 쓴 말 먼저 추가
     console.log('✅ 사용자 메시지 생성:', userMessage.content);
     setChatMessages(prev => [...prev, userMessage]);
     setChatInput('');
     setChatLoading(true);
 
     try {
-      // FormData로 전송 (백엔드 요구사항)
+      // 👉 백엔드 명세: multipart/form-data 로 보내는 중
       const formData = new FormData();
       formData.append('user_id', userId.toString());
       formData.append('message', userMessage.content);
-      
-      // 선택된 아이템 ID 추가
+
       if (selectedItemIds.length > 0) {
         formData.append('selected_items', JSON.stringify(selectedItemIds));
         console.log('✅ 선택된 아이템 포함:', selectedItemIds);
@@ -199,85 +225,102 @@ export default function LLMChatScreen({
       });
       console.log('📥 API 응답 상태:', response.status);
 
-      if (response.ok) {
-        const data = await response.json();
-        console.log('📦 전체 응답 데이터:', data);
-        console.log('🎯 추천 아이템 수:', data.recommendations?.length || 0);
-        console.log('🎯 추천 아이템 샘플:', data.recommendations?.[0]);
-        
-        const assistantMessage: ChatMessage = {
-          role: 'assistant',
-          content: data.response,
-          timestamp: new Date(),
-        };
-
-        setChatMessages(prev => [...prev, assistantMessage]);
-        
-        // 추천 아이템이 있으면 표시
-        if (data.recommendations && data.recommendations.length > 0) {
-          console.log('✅ 추천 아이템 설정:', data.recommendations.length, '개');
-          
-          // 백엔드 형식을 프론트엔드 형식으로 변환
-          const formattedRecommendations = data.recommendations.map((rec: any) => {
-            // 아이템 이름 생성
-            let itemName = '';
-            const categories = [];
-            if (rec.has_dress) categories.push('원피스');
-            if (rec.has_outer) categories.push('아우터');
-            if (rec.has_top) categories.push('상의');
-            if (rec.has_bottom) categories.push('하의');
-            
-            itemName = categories.length > 0 ? categories.join(' / ') : `아이템 ${rec.item_id || rec.id}`;
-            
-            return {
-              id: rec.item_id || rec.id,
-              name: rec.name || itemName,
-              brand: rec.is_default ? '기본 아이템' : 'My Wardrobe',
-              category: rec.has_top ? 'top' : rec.has_bottom ? 'bottom' : rec.has_outer ? 'outer' : rec.has_dress ? 'dress' : 'other',
-              color: '',
-              fit: '',
-              materials: [],
-              image: rec.image_path || '',
-              image_path: rec.image_path || '',
-              has_top: rec.has_top,
-              has_bottom: rec.has_bottom,
-              has_outer: rec.has_outer,
-              has_dress: rec.has_dress,
-              is_recommended: true,  // 👈 추천 아이템 표시용
-            };
-          });
-          
-          // 선택된 아이템 정보도 함께 표시 (추천 결과 앞에 배치)
-          // 주의: selectedItemIds를 초기화하기 전에 필터링해야 함
-          const currentlySelected = [...selectedItemIds];  // 복사본 생성
-          
-          const selectedItems = chatRecommendations.filter(item => 
-            currentlySelected.includes(item.id)
-          ).map(item => ({
-            ...item,
-            is_selected: true  // 👈 선택된 아이템 표시용
-          }));
-          
-          console.log('🎨 변환된 추천 아이템:', formattedRecommendations);
-          console.log('👕 선택된 아이템:', selectedItems);
-          console.log('🔄 선택 초기화 전 selectedItemIds:', selectedItemIds);
-          
-          // 선택 초기화 (먼저 실행)
-          setSelectedItemIds([]);
-          console.log('✅ 선택 초기화 완료');
-          
-          // 선택된 아이템 + 추천 아이템 함께 표시
-          setChatRecommendations([...selectedItems, ...formattedRecommendations]);
-        } else {
-          console.log('⚠️ 추천 아이템이 없음');
-        }
-      } else {
+      if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('📦 전체 응답 데이터:', data);
+      console.log('🎯 추천 아이템 수(raw):', data.recommendations?.length || 0);
+      console.log('🎯 추천 아이템 샘플(raw):', data.recommendations?.[0]);
+
+      // 일단 AI 답변(말풍선) push
+      const assistantMessage: ChatMessage = {
+        role: 'assistant',
+        content: data.response,
+        timestamp: new Date(),
+      };
+      setChatMessages(prev => [...prev, assistantMessage]);
+
+      // ---------------------------
+      // 추천 아이템 카드 만들기
+      // ---------------------------
+
+      // 백엔드가 보내는 건 숫자 배열(아이템 id들)일 거라고 가정
+      // e.g. [10, 7, 22]
+      const recIds: number[] = Array.isArray(data.recommendations)
+        ? data.recommendations
+        : [];
+
+      // 추천된 id -> 실제 wardrobeItems에서 해당 아이템 정보 찾아오기
+      const recItemsDetailed: WardrobeItem[] = recIds
+        .map(id => wardrobeItems.find(w => w.id === id))
+        .filter((itm): itm is WardrobeItem => !!itm)
+        .map(itm => {
+          // 이름 만들기 (카테고리 기반으로 사람이 읽을만하게)
+          let label = itm.name;
+          if (!label) {
+            const cats: string[] = [];
+            if (itm.has_dress) cats.push('원피스');
+            if (itm.has_outer) cats.push('아우터');
+            if (itm.has_top) cats.push('상의');
+            if (itm.has_bottom) cats.push('하의');
+            label = cats.length > 0 ? cats.join(' / ') : `아이템 ${itm.id}`;
+          }
+
+          return {
+            ...itm,
+            name: label,
+            brand: itm.is_default ? '기본템' : '내 옷',
+            is_recommended: true,
+            is_selected: false,
+          };
+        });
+
+      // 선택된 아이템들(내가 고른 것들)도 같이 카드 상단에 보여줄 건데
+      // selectedItemIds 기준으로 wardrobeItems에서 찾아서 붙여줌
+      const selectedDetailed: WardrobeItem[] = selectedItemIds
+        .map(id => wardrobeItems.find(w => w.id === id))
+        .filter((itm): itm is WardrobeItem => !!itm)
+        .map(itm => {
+          let label = itm.name;
+          if (!label) {
+            const cats: string[] = [];
+            if (itm.has_dress) cats.push('원피스');
+            if (itm.has_outer) cats.push('아우터');
+            if (itm.has_top) cats.push('상의');
+            if (itm.has_bottom) cats.push('하의');
+            label = cats.length > 0 ? cats.join(' / ') : `아이템 ${itm.id}`;
+          }
+
+          return {
+            ...itm,
+            name: label,
+            brand: itm.is_default ? '기본템' : '내 옷',
+            is_recommended: false,
+            is_selected: true,
+          };
+        });
+
+      console.log('🎨 변환된 추천 아이템:', recItemsDetailed);
+      console.log('📌 현재 선택 아이템 카드:', selectedDetailed);
+
+      // 다음 턴을 위해 선택은 비워 줌 (UX: 추천 받고 나면 초기화)
+      setSelectedItemIds([]);
+
+      // 화면에 뿌릴 카드 리스트 만들기
+      // - "선택한 옷" 섹션 (is_selected=true)
+      // - "추천 코디" 섹션 (is_recommended=true)
+      if (selectedDetailed.length === 0 && recItemsDetailed.length === 0) {
+        console.log('⚠️ 추천 아이템이 없음');
+        setChatRecommendations([]);
+      } else {
+        setChatRecommendations([...selectedDetailed, ...recItemsDetailed]);
       }
     } catch (error) {
       console.error('❌ LLM 채팅 실패:', error);
       Alert.alert('오류', 'AI와의 대화 중 오류가 발생했습니다.');
-      
+
       const errorMessage: ChatMessage = {
         role: 'assistant',
         content: '죄송합니다. 일시적인 오류가 발생했습니다. 다시 시도해주세요.',
@@ -289,26 +332,31 @@ export default function LLMChatScreen({
     }
   };
 
-  // 초기 인사 메시지
+  // --------------------------------------------------
+  // 5) 초기 인사 메시지 (맨 처음 화면 들어왔을 때 1번만)
+  // --------------------------------------------------
   useEffect(() => {
     console.log('💬 초기 메시지 체크...');
     console.log('  - 옷장 아이템 수:', wardrobeItems.length);
     console.log('  - 채팅 메시지 수:', chatMessages.length);
-    
+
     if (chatMessages.length === 0 && userId) {
       console.log('✅ 초기 인사 메시지 생성');
       const welcomeMessage: ChatMessage = {
         role: 'assistant',
-        content: wardrobeItems.length > 0 
-          ? `안녕하세요! 저는 당신의 패션 스타일리스트 AI입니다. 옷장에 ${wardrobeItems.length}개의 아이템이 있네요. 어떤 스타일링을 도와드릴까요?`
-          : `안녕하세요! 저는 당신의 패션 스타일리스트 AI입니다. 어떤 스타일링을 도와드릴까요?`,
+        content:
+          wardrobeItems.length > 0
+            ? `안녕하세요! 저는 당신의 패션 스타일리스트 AI입니다. 옷장에 ${wardrobeItems.length}개의 아이템이 있네요. 어떤 스타일링을 도와드릴까요?`
+            : `안녕하세요! 저는 당신의 패션 스타일리스트 AI입니다. 어떤 스타일링을 도와드릴까요?`,
         timestamp: new Date(),
       };
       setChatMessages([welcomeMessage]);
     }
   }, [wardrobeItems, chatMessages.length, userId]);
 
-  // 권한 요청
+  // --------------------------------------------------
+  // 6) 카메라/갤러리 권한
+  // --------------------------------------------------
   const requestPermissions = async () => {
     if (Platform.OS === 'web') return true;
 
@@ -322,7 +370,7 @@ export default function LLMChatScreen({
     return true;
   };
 
-  // 카메라로 촬영
+  // 촬영
   const takePhoto = async () => {
     const hasPermission = await requestPermissions();
     if (!hasPermission) return;
@@ -338,7 +386,7 @@ export default function LLMChatScreen({
     }
   };
 
-  // 갤러리에서 선택
+  // 갤러리
   const pickImage = async () => {
     const hasPermission = await requestPermissions();
     if (!hasPermission) return;
@@ -355,7 +403,9 @@ export default function LLMChatScreen({
     }
   };
 
-  // 이미지 업로드
+  // --------------------------------------------------
+  // 7) 이미지 업로드 -> 백엔드가 새 아이템 분석/등록
+  // --------------------------------------------------
   const uploadImage = async (imageUri: string) => {
     if (!userId) {
       Alert.alert('오류', '사용자 정보를 불러올 수 없습니다.');
@@ -365,6 +415,7 @@ export default function LLMChatScreen({
     setUploading(true);
     setChatLoading(true);
 
+    // 업로드중이라고 채팅에 띄워놓기
     const uploadingMessage: ChatMessage = {
       role: 'assistant',
       content: '📸 사진 분석 중입니다...',
@@ -374,10 +425,10 @@ export default function LLMChatScreen({
 
     try {
       const formData = new FormData();
-      
+
       if (Platform.OS === 'web') {
-        const response = await fetch(imageUri);
-        const blob = await response.blob();
+        const res = await fetch(imageUri);
+        const blob = await res.blob();
         const file = new File([blob], 'photo.jpg', { type: 'image/jpeg' });
         formData.append('image', file);
       } else {
@@ -391,27 +442,29 @@ export default function LLMChatScreen({
           type: type,
         } as any);
       }
-      
+
       formData.append('user_id', String(userId));
 
       console.log('📤 이미지 업로드 시작:', `${API_BASE_URL}/api/chat/upload`);
-      
+
       const uploadResponse = await fetch(`${API_BASE_URL}/api/chat/upload`, {
         method: 'POST',
         body: formData,
         headers: {
-          'Accept': 'application/json',
+          Accept: 'application/json',
         },
       });
 
       const data = await uploadResponse.json();
       console.log('📦 업로드 응답:', data);
 
-      // 업로드 중 메시지 제거
-      setChatMessages(prev => prev.filter(msg => msg.content !== '📸 사진 분석 중입니다...'));
+      // "📸 사진 분석 중입니다..." 메시지 지우기
+      setChatMessages(prev =>
+        prev.filter(msg => msg.content !== '📸 사진 분석 중입니다...'),
+      );
 
       if (data.success) {
-        // AI 응답 메시지
+        // AI 메시지
         const aiMessage: ChatMessage = {
           role: 'assistant',
           content: data.message,
@@ -419,12 +472,19 @@ export default function LLMChatScreen({
         };
         setChatMessages(prev => [...prev, aiMessage]);
 
-        // 업로드된 아이템 카드로 표시
+        // 업로드된 아이템이 있으면 카드에 띄워주기
         if (data.uploaded_item) {
-          setChatRecommendations([data.uploaded_item]);
+          // uploaded_item은 서버에서 이미 예쁘게 만들어 줄 수도 있고
+          // 아니라도 최소한 image_path 같은 건 있을 거라 가정
+          const justUploadedCard: WardrobeItem = {
+            ...data.uploaded_item,
+            is_recommended: false,
+            is_selected: true,
+          };
+          setChatRecommendations([justUploadedCard]);
         }
 
-        // 옷장 갱신
+        // 옷장 다시 불러와서 상태 sync
         fetchWardrobe();
       } else {
         const errorMessage: ChatMessage = {
@@ -436,10 +496,12 @@ export default function LLMChatScreen({
       }
     } catch (error) {
       console.error('❌ 업로드 실패:', error);
-      
-      // 업로드 중 메시지 제거
-      setChatMessages(prev => prev.filter(msg => msg.content !== '📸 사진 분석 중입니다...'));
-      
+
+      // 업로드중 메시지 제거
+      setChatMessages(prev =>
+        prev.filter(msg => msg.content !== '📸 사진 분석 중입니다...'),
+      );
+
       const errorMessage: ChatMessage = {
         role: 'assistant',
         content: '업로드 중 오류가 발생했습니다. 다시 시도해주세요.',
@@ -452,24 +514,33 @@ export default function LLMChatScreen({
     }
   };
 
-  // 이미지 선택 옵션
+  // --------------------------------------------------
+  // 8) 사진 아이콘 눌렀을 때
+  // --------------------------------------------------
   const showImageOptions = () => {
     if (uploading) return;
 
     if (Platform.OS === 'web') {
       pickImage();
     } else {
-      Alert.alert(
-        '사진 추가',
-        '어떻게 추가하시겠어요?',
-        [
-          { text: '📸 카메라로 촬영', onPress: takePhoto },
-          { text: '🖼️ 갤러리에서 선택', onPress: pickImage },
-          { text: '취소', style: 'cancel' },
-        ]
-      );
+      Alert.alert('사진 추가', '어떻게 추가하시겠어요?', [
+        { text: '📸 카메라로 촬영', onPress: takePhoto },
+        { text: '🖼️ 갤러리에서 선택', onPress: pickImage },
+        { text: '취소', style: 'cancel' },
+      ]);
     }
   };
+
+  // --------------------------------------------------
+  // 9) 렌더
+  // --------------------------------------------------
+  // 추천/선택 카드들 중에서 어떤 섹션을 보여줄지 결정
+  const hasSelectedCards = chatRecommendations.some(item => item.is_selected);
+  const hasRecommendedCards = chatRecommendations.some(item => item.is_recommended);
+  const showWardrobePlain =
+    chatRecommendations.length > 0 &&
+    !hasSelectedCards &&
+    !hasRecommendedCards;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -482,14 +553,14 @@ export default function LLMChatScreen({
           </Pressable>
         }
       />
-      
-      <KeyboardAvoidingView 
+
+      <KeyboardAvoidingView
         style={styles.container}
         behavior="padding"
         keyboardVerticalOffset={-60}
       >
         {/* 채팅 메시지 영역 */}
-        <ScrollView 
+        <ScrollView
           style={styles.chatArea}
           contentContainerStyle={styles.chatContent}
           showsVerticalScrollIndicator={false}
@@ -503,37 +574,47 @@ export default function LLMChatScreen({
                 message.role === 'user' ? styles.userMessage : styles.assistantMessage,
               ]}
             >
-              <Text style={[
-                styles.messageText,
-                message.role === 'user' ? styles.userMessageText : styles.assistantMessageText,
-              ]}>
+              <Text
+                style={[
+                  styles.messageText,
+                  message.role === 'user'
+                    ? styles.userMessageText
+                    : styles.assistantMessageText,
+                ]}
+              >
                 {message.content}
               </Text>
               <Text style={styles.messageTime}>
-                {message.timestamp.toLocaleTimeString('ko-KR', { 
-                  hour: '2-digit', 
-                  minute: '2-digit' 
+                {message.timestamp.toLocaleTimeString('ko-KR', {
+                  hour: '2-digit',
+                  minute: '2-digit',
                 })}
               </Text>
             </View>
           ))}
-          
+
           {chatLoading && (
             <View style={[styles.messageContainer, styles.assistantMessage]}>
               <ActivityIndicator size="small" color="#6B7280" />
-              <Text style={[styles.messageText, styles.assistantMessageText, { marginLeft: 8 }]}>
+              <Text
+                style={[
+                  styles.messageText,
+                  styles.assistantMessageText,
+                  { marginLeft: 8 },
+                ]}
+              >
                 AI가 답변을 준비 중입니다...
               </Text>
             </View>
           )}
         </ScrollView>
 
-        {/* 선택한 옷 섹션 */}
-        {chatRecommendations.some(item => item.is_selected) && (
+        {/* 📌 선택한 옷 섹션 */}
+        {hasSelectedCards && (
           <View style={styles.recommendationsContainer}>
             <View style={styles.recommendationsHeader}>
               <Text style={styles.recommendationsTitle}>📌 선택한 옷</Text>
-              <Pressable 
+              <Pressable
                 style={styles.closeButton}
                 onPress={() => setChatRecommendations([])}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -541,21 +622,35 @@ export default function LLMChatScreen({
                 <X size={18} color="#6B7280" />
               </Pressable>
             </View>
+
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View style={styles.recommendationsList}>
                 {chatRecommendations
                   .filter(item => item.is_selected)
                   .map((item, index) => (
-                    <Pressable 
-                      key={`selected-${item.id}-${index}`} 
+                    <Pressable
+                      key={`selected-${item.id}-${index}`}
                       style={[styles.recommendationCard, styles.selectedItemCard]}
-                      onPress={() => {}}  // 클릭 불가
+                      onPress={() => {}}
                     >
-                      <Image 
-                        source={{ uri: `${API_BASE_URL}${item.image_path || item.image}` }} 
+                      <Image
+                        source={{
+                          uri: `${API_BASE_URL}${item.image_path || item.image}`,
+                        }}
                         style={styles.recommendationImage}
-                        onError={(e) => console.error('❌ 이미지 로드 실패:', `${API_BASE_URL}${item.image_path || item.image}`, e.nativeEvent.error)}
-                        onLoad={() => console.log('✅ 이미지 로드 성공:', `${API_BASE_URL}${item.image_path || item.image}`)}
+                        onError={e =>
+                          console.error(
+                            '❌ 이미지 로드 실패:',
+                            `${API_BASE_URL}${item.image_path || item.image}`,
+                            e.nativeEvent.error,
+                          )
+                        }
+                        onLoad={() =>
+                          console.log(
+                            '✅ 이미지 로드 성공:',
+                            `${API_BASE_URL}${item.image_path || item.image}`,
+                          )
+                        }
                       />
                       <View style={styles.selectedItemBadge}>
                         <Text style={styles.selectedItemBadgeText}>선택함</Text>
@@ -570,13 +665,14 @@ export default function LLMChatScreen({
           </View>
         )}
 
-        {/* 추천 코디 섹션 */}
-        {chatRecommendations.some(item => item.is_recommended) && (
+        {/* ✨ 추천 코디 섹션 */}
+        {hasRecommendedCards && (
           <View style={styles.recommendationsContainer}>
             <View style={styles.recommendationsHeader}>
               <Text style={styles.recommendationsTitle}>✨ 추천 코디</Text>
-              {!chatRecommendations.some(item => item.is_selected) && (
-                <Pressable 
+
+              {!hasSelectedCards && (
+                <Pressable
                   style={styles.closeButton}
                   onPress={() => setChatRecommendations([])}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -585,38 +681,53 @@ export default function LLMChatScreen({
                 </Pressable>
               )}
             </View>
+
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View style={styles.recommendationsList}>
                 {chatRecommendations
                   .filter(item => item.is_recommended)
                   .map((item, index) => {
-                    // 실시간 선택 상태 (체크 마크용)
+                    // 지금 선택 중인지 (체크마크 표시용)
                     const isCurrentlySelected = selectedItemIds.includes(item.id);
-                    
+
                     return (
-                      <Pressable 
-                        key={`recommended-${item.id}-${index}`} 
+                      <Pressable
+                        key={`recommended-${item.id}-${index}`}
                         style={[
                           styles.recommendationCard,
-                          isCurrentlySelected && styles.recommendationCardSelected
+                          isCurrentlySelected && styles.recommendationCardSelected,
                         ]}
                         onPress={() => toggleItemSelection(item.id)}
                       >
-                        <Image 
-                          source={{ uri: `${API_BASE_URL}${item.image_path || item.image}` }} 
+                        <Image
+                          source={{
+                            uri: `${API_BASE_URL}${item.image_path || item.image}`,
+                          }}
                           style={styles.recommendationImage}
-                          onError={(e) => console.error('❌ 이미지 로드 실패:', `${API_BASE_URL}${item.image_path || item.image}`, e.nativeEvent.error)}
-                          onLoad={() => console.log('✅ 이미지 로드 성공:', `${API_BASE_URL}${item.image_path || item.image}`)}
+                          onError={e =>
+                            console.error(
+                              '❌ 이미지 로드 실패:',
+                              `${API_BASE_URL}${item.image_path || item.image}`,
+                              e.nativeEvent.error,
+                            )
+                          }
+                          onLoad={() =>
+                            console.log(
+                              '✅ 이미지 로드 성공:',
+                              `${API_BASE_URL}${item.image_path || item.image}`,
+                            )
+                          }
                         />
                         <View style={styles.recommendedBadge}>
                           <Text style={styles.recommendedBadgeText}>추천</Text>
                         </View>
-                        {/* 현재 선택 중인 아이템 체크 마크 (실시간) */}
+
                         {isCurrentlySelected && (
                           <View style={styles.selectedBadge}>
                             <Check size={16} color="#FFF" />
                           </View>
                         )}
+
                         <Text style={styles.recommendationName} numberOfLines={2}>
                           {item.name || item.category || '의류'}
                         </Text>
@@ -628,13 +739,12 @@ export default function LLMChatScreen({
           </View>
         )}
 
-        {/* 옷장 전체 보기 (선택도 추천도 아닌 경우) */}
-        {chatRecommendations.length > 0 && 
-         !chatRecommendations.some(item => item.is_selected || item.is_recommended) && (
+        {/* 👗 그냥 카드 리스트만 있을 때 (ex. 옷장 전체 보여줘 등) */}
+        {showWardrobePlain && (
           <View style={styles.recommendationsContainer}>
             <View style={styles.recommendationsHeader}>
               <Text style={styles.recommendationsTitle}>👗 내 옷장</Text>
-              <Pressable 
+              <Pressable
                 style={styles.closeButton}
                 onPress={() => setChatRecommendations([])}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -642,31 +752,47 @@ export default function LLMChatScreen({
                 <X size={18} color="#6B7280" />
               </Pressable>
             </View>
+
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View style={styles.recommendationsList}>
                 {chatRecommendations.map((item, index) => {
                   const isCurrentlySelected = selectedItemIds.includes(item.id);
-                  
+
                   return (
-                    <Pressable 
-                      key={`wardrobe-${item.id}-${index}`} 
+                    <Pressable
+                      key={`wardrobe-${item.id}-${index}`}
                       style={[
                         styles.recommendationCard,
-                        isCurrentlySelected && styles.recommendationCardSelected
+                        isCurrentlySelected && styles.recommendationCardSelected,
                       ]}
                       onPress={() => toggleItemSelection(item.id)}
                     >
-                      <Image 
-                        source={{ uri: `${API_BASE_URL}${item.image_path || item.image}` }} 
+                      <Image
+                        source={{
+                          uri: `${API_BASE_URL}${item.image_path || item.image}`,
+                        }}
                         style={styles.recommendationImage}
-                        onError={(e) => console.error('❌ 이미지 로드 실패:', `${API_BASE_URL}${item.image_path || item.image}`, e.nativeEvent.error)}
-                        onLoad={() => console.log('✅ 이미지 로드 성공:', `${API_BASE_URL}${item.image_path || item.image}`)}
+                        onError={e =>
+                          console.error(
+                            '❌ 이미지 로드 실패:',
+                            `${API_BASE_URL}${item.image_path || item.image}`,
+                            e.nativeEvent.error,
+                          )
+                        }
+                        onLoad={() =>
+                          console.log(
+                            '✅ 이미지 로드 성공:',
+                            `${API_BASE_URL}${item.image_path || item.image}`,
+                          )
+                        }
                       />
+
                       {isCurrentlySelected && (
                         <View style={styles.selectedBadge}>
                           <Check size={16} color="#FFF" />
                         </View>
                       )}
+
                       <Text style={styles.recommendationName} numberOfLines={2}>
                         {item.name || item.category || '의류'}
                       </Text>
@@ -692,6 +818,7 @@ export default function LLMChatScreen({
               <Camera size={20} color="#6B7280" />
             )}
           </Pressable>
+
           <TextInput
             style={styles.textInput}
             placeholder="AI에게 패션 조언을 요청해보세요..."
@@ -702,8 +829,13 @@ export default function LLMChatScreen({
             placeholderTextColor="#9CA3AF"
             editable={!uploading}
           />
+
           <Pressable
-            style={[styles.sendButton, (!chatInput.trim() || chatLoading || uploading) && styles.sendButtonDisabled]}
+            style={[
+              styles.sendButton,
+              (!chatInput.trim() || chatLoading || uploading) &&
+                styles.sendButtonDisabled,
+            ]}
             onPress={() => {
               console.log('🔘 보내기 버튼 클릭됨!');
               sendChatMessage();
@@ -783,11 +915,12 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textAlign: 'right',
   },
+
   recommendationsContainer: {
     backgroundColor: '#FFF',
     borderRadius: 12,
     padding: 16,
-    marginBottom: 16,  // 섹션 간 간격 증가
+    marginBottom: 16, // 섹션 간 간격
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
@@ -884,6 +1017,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     lineHeight: 16,
   },
+
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -891,7 +1025,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    marginBottom: BOTTOM_NAV_HEIGHT + 8, // 네비게이션 바 위에 배치
+    marginBottom: BOTTOM_NAV_HEIGHT + 8, // 하단 네비 위로 띄우기
     borderWidth: 1,
     borderColor: '#E5E7EB',
     gap: 12,
@@ -922,9 +1056,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#111',
     alignItems: 'center',
     justifyContent: 'center',
-    flexShrink: 0, // 버튼이 줄어들지 않도록
-    elevation: 2, // 안드로이드 그림자
-    shadowColor: '#000', // iOS 그림자
+    flexShrink: 0,
+    elevation: 2, // Android shadow
+    shadowColor: '#000', // iOS shadow
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.2,
     shadowRadius: 2,
